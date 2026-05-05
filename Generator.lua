@@ -33,12 +33,38 @@ local DUNGEON_MYTHIC = 23
 
 local ELIGIBLE_RAID_DIFFS = {RAID_NORMAL, RAID_HEROIC, RAID_MYTHIC}
 
+-- Item class/subclass IDs used to exclude non-Voidcore-eligible items.
+local ITEM_CLASS_MISCELLANEOUS = 15 -- LE_ITEM_CLASS_MISCELLANEOUS
+local ITEM_SUBCLASS_MOUNT = 5 -- LE_ITEM_MISCELLANEOUS_MOUNT
+local ITEM_CLASS_HOUSING = 20 -- Housing Decor items
+
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
 -- Collects all lootable itemIDs visible under the CURRENT EJ selection
 -- and CURRENT loot filter.  displayAsPerPlayerLoot=true marks bonus/extra-drop
 -- items (crafting plans, cosmetics) that are not part of the standard loot
 -- table — exclude those and trust the EJ for everything else.
+local function IsExcludedItem(itemID)
+    local _, _, _, _, _, classID, subClassID = GetItemInfoInstant(itemID)
+    -- Fall back to GetItemInfo if GetItemInfoInstant has no cached data yet.
+    if not classID then
+        local _, _, _, _, _, c2, s2 = GetItemInfo(itemID)
+        classID    = c2
+        subClassID = s2
+    end
+    -- If classID is still unknown, exclude to be safe.
+    if not classID then
+        return true
+    end
+    if classID == ITEM_CLASS_MISCELLANEOUS and subClassID == ITEM_SUBCLASS_MOUNT then
+        return true
+    end
+    if classID == ITEM_CLASS_HOUSING then
+        return true
+    end
+    return false
+end
+
 local function CollectItemsForCurrentFilter()
     local items = {}
     local seen = {}
@@ -46,8 +72,10 @@ local function CollectItemsForCurrentFilter()
     for i = 1, n do
         local info = C_EncounterJournal and C_EncounterJournal.GetLootInfoByIndex(i)
         if info and info.itemID and info.itemID > 0 and not seen[info.itemID] and not info.displayAsPerPlayerLoot then
-            seen[info.itemID] = true
-            items[#items + 1] = info.itemID
+            if not IsExcludedItem(info.itemID) then
+                seen[info.itemID] = true
+                items[#items + 1] = info.itemID
+            end
         end
     end
     return items
