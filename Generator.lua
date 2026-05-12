@@ -38,6 +38,34 @@ local ITEM_CLASS_MISCELLANEOUS = 15 -- LE_ITEM_CLASS_MISCELLANEOUS
 local ITEM_SUBCLASS_MOUNT = 5 -- LE_ITEM_MISCELLANEOUS_MOUNT
 local ITEM_CLASS_HOUSING = 20 -- Housing Decor items
 
+-- Slot tokens that the drawer cares about.  Maps INVTYPE_* → canonical slot key.
+-- Tokens not listed here are ignored (consumables, reagents, etc.).
+local SLOT_TOKEN_MAP = {
+    INVTYPE_HEAD = "head",
+    INVTYPE_NECK = "neck",
+    INVTYPE_SHOULDER = "shoulder",
+    INVTYPE_CLOAK = "back",
+    INVTYPE_CHEST = "chest",
+    INVTYPE_ROBE = "chest", -- robe uses the chest slot
+    INVTYPE_WRIST = "wrist",
+    INVTYPE_HAND = "hands",
+    INVTYPE_WAIST = "waist",
+    INVTYPE_LEGS = "legs",
+    INVTYPE_FEET = "feet",
+    INVTYPE_FINGER = "finger",
+    INVTYPE_TRINKET = "trinket",
+    INVTYPE_WEAPON = "1h", -- one-hand
+    INVTYPE_SHIELD = "offhand",
+    INVTYPE_WEAPONMAINHAND = "1h",
+    INVTYPE_WEAPONOFFHAND = "1h", -- off-hand weapon (treated as 1h for slot grouping)
+    INVTYPE_HOLDABLE = "offhand", -- held in off-hand (tomes etc.)
+    INVTYPE_2HWEAPON = "2h",
+    INVTYPE_RANGED = "ranged",
+    INVTYPE_RANGEDRIGHT = "ranged",
+    INVTYPE_THROWN = "ranged",
+    INVTYPE_RELIC = "ranged"
+}
+
 -- ── Helpers ──────────────────────────────────────────────────────────────────
 
 -- Collects all lootable itemIDs visible under the CURRENT EJ selection
@@ -49,7 +77,7 @@ local function IsExcludedItem(itemID)
     -- Fall back to GetItemInfo if GetItemInfoInstant has no cached data yet.
     if not classID then
         local _, _, _, _, _, c2, s2 = GetItemInfo(itemID)
-        classID    = c2
+        classID = c2
         subClassID = s2
     end
     -- If classID is still unknown, exclude to be safe.
@@ -63,6 +91,19 @@ local function IsExcludedItem(itemID)
         return true
     end
     return false
+end
+
+-- Returns the canonical slot key for an itemID, or nil if not a gear slot.
+local function GetSlotKey(itemID)
+    local _, _, _, _, _, _, _, _, equipLoc = GetItemInfoInstant(itemID)
+    if not equipLoc or equipLoc == "" then
+        local _, _, _, _, _, _, _, _, equipLoc2 = GetItemInfo(itemID)
+        equipLoc = equipLoc2
+    end
+    if not equipLoc or equipLoc == "" then
+        return nil
+    end
+    return SLOT_TOKEN_MAP[equipLoc]
 end
 
 local function CollectItemsForCurrentFilter()
@@ -366,6 +407,7 @@ local function RunGeneration()
         if not VoidcoreAdvisorGenDB then
             VoidcoreAdvisorGenDB = {}
         end
+
         VoidcoreAdvisorGenDB.seasonData = result
 
         local ver = select(4, GetBuildInfo and GetBuildInfo() or "?")
@@ -536,6 +578,25 @@ local function RunGeneration()
             end
             dungeonData.byClass = byClassFinal
             dungeonData.bySpec = bySpecFinal
+
+            -- Build bySlot: { [slotKey] = { sorted itemIDs } }
+            local slotBuckets = {}
+            for _, itemID in ipairs(dungeonData.all) do
+                local slotKey = GetSlotKey(itemID)
+                if slotKey then
+                    if not slotBuckets[slotKey] then
+                        slotBuckets[slotKey] = {}
+                    end
+                    slotBuckets[slotKey][#slotBuckets[slotKey] + 1] = itemID
+                end
+            end
+            local bySlot = {}
+            for slotKey, ids in pairs(slotBuckets) do
+                table.sort(ids)
+                bySlot[slotKey] = ids
+            end
+            dungeonData.bySlot = bySlot
+
             -- Remove temp fields so they are not serialised to SavedVariables.
             dungeonData._encClass = nil
             dungeonData._encSpec = nil
@@ -673,8 +734,8 @@ SlashCmdList["VCAGEN"] = function(msg)
         end
     else
         print("|cff66ccffVoidcoreAdvisorGen:|r Commands:")
-        print("  |cffffd700/vcagen run|r    — Walk EJ and collect season loot data")
-        print("  |cffffd700/vcagen status|r — Show last generation result")
+        print("  |cffffd700/vcagen run|r           — Walk EJ and collect season loot data")
+        print("  |cffffd700/vcagen status|r         — Show last generation result")
         print("")
         print("After running: type |cffffd700/reload|r, then open your SavedVariables file and")
         print("copy VoidcoreAdvisorGenDB[\"seasonData\"] into Core/SeasonData.lua.")
