@@ -281,6 +281,7 @@ local function DiscoverSeason()
         if not instanceID then
             break
         end
+        -- Value starts as true; raid-discover will upgrade it to { mapID=N }.
         raidInstanceIDs[instanceID] = true
         idx = idx + 1
     end
@@ -638,6 +639,15 @@ local function RunGeneration()
                 end
                 encounterIDs[#encounterIDs + 1] = encounterID
                 encIdx = encIdx + 1
+            end
+
+            -- Capture the WoW mapID so Detection can resolve the EJ instanceID
+            -- from GetInstanceInfo()'s 8th return at runtime without a name lookup.
+            local _, _, _, _, _, _, _, _, _, ejMapID = EJ_GetInstanceInfo(instanceID)
+            if ejMapID and ejMapID ~= 0 then
+                result.raidInstanceIDs[instanceID] = {
+                    mapID = ejMapID
+                }
             end
 
             -- Queue per-encounter × per-difficulty collection
