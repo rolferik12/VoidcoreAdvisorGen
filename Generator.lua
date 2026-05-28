@@ -274,6 +274,12 @@ local function DiscoverSeason()
         idx = idx + 1
     end
 
+    -- EJ instance IDs that appear in the raid list but are world boss collections
+    -- and therefore not eligible for Nebulous Voidcores.
+    local EXCLUDED_RAID_INSTANCE_IDS = {
+        [1312] = true -- Midnight (world bosses: Lu'ashal, Thorm'belan, Predaxas, Cragpine)
+    }
+
     -- Raids (isRaid = true)
     idx = 1
     while true do
@@ -281,8 +287,10 @@ local function DiscoverSeason()
         if not instanceID then
             break
         end
-        -- Value starts as true; raid-discover will upgrade it to { mapID=N }.
-        raidInstanceIDs[instanceID] = true
+        if not EXCLUDED_RAID_INSTANCE_IDS[instanceID] then
+            -- Value starts as true; raid-discover will upgrade it to { mapID=N }.
+            raidInstanceIDs[instanceID] = true
+        end
         idx = idx + 1
     end
 
