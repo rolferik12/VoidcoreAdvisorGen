@@ -33,6 +33,62 @@ local DUNGEON_MYTHIC = 23
 
 local ELIGIBLE_RAID_DIFFS = {RAID_NORMAL, RAID_HEROIC, RAID_MYTHIC}
 
+-- ── Known Nebulous Voidcache item IDs (update from Wowhead each season) ──────
+-- Source: https://www.wowhead.com/ptr/search?q=nebulous+voidcache&results=items&json
+-- All seasons are listed; the matching phase only outputs IDs for the current season.
+-- Items marked [non-EJ] are not in the Encounter Journal — they must be added to
+-- Constants.lua manually. All others are matched automatically by DoVoidcacheMatch.
+local KNOWN_VOIDCACHE_ITEM_IDS =
+    { -- ── Season 1 (12.0.x) ── Crown of Midnight (raid) ───────────────────────
+    262658, -- Midnight Falls
+    267488, -- Crown of the Cosmos
+    268458, -- Belo'ren, Child of Al'ar
+    268459, -- Imperator Averzian
+    268460, -- Vorasius
+    268461, -- Fallen-King Salhadaar
+    268462, -- Vaelgor & Ezzorak
+    268463, -- Lightblinded Vanguard
+    268464, -- Chimaerus the Undreamt God
+    275228, -- Rotmire
+    -- ── Season 1 (12.0.x) ── M+ Dungeons ─────────────────────────────────────
+    268465, -- Algeth'ar Academy
+    268466, -- Magisters' Terrace
+    268467, -- Nexus-Point Xenas
+    268468, -- Pit of Saron
+    268469, -- Seat of the Triumvirate
+    268470, -- Skyreach
+    268471, -- Windrunner Spire
+    268473, -- Maisara Caverns
+    -- ── Season 1 (12.0.x) ── Non-EJ (add to Constants.lua manually) ──────────
+    268969, -- Delver's Trove
+    269768, -- Prey
+    -- ── Season 2 (12.1.0) ── The Tidebound Grotto (raid) ─────────────────────────────
+    274708, -- Nymrissa Wavecaller
+    -- ── Season 2 (12.1.0) ── The Venomous Abyss (raid) ─────────────────────────────
+    278285, -- Soulcoiler Nek'zali
+    278283, -- Entombed Sentinels
+    278286, -- Tortollan Explorers
+    278287, -- Vashnik
+    278288, -- Sszorak
+    278289, -- The Twin Fangs
+    278290, -- The Coiled Altar
+    278284, -- Ula'tek
+    -- ── Season 2 (12.1.0) ── M+ Dungeons ─────────────────────────────────────
+    279618, -- Altar of Fangs
+    279619, -- The Blinding Vale
+    279620, -- Den of Nalorakk
+    279621, -- Kings' Rest
+    279622, -- Ruby Life Pools
+    279623, -- Murder Row
+    279624, -- Temple of Sethraliss
+    279625, -- Voidscar Arena
+    -- ── Season 2 (12.1.0) ── Non-EJ (add to Constants.lua manually) ──────────
+    279284, -- Delver's Trove
+    280131 -- Prey
+    }
+
+local VOIDCACHE_NAME_PREFIX = "Nebulous Voidcache: "
+
 -- Item class/subclass IDs used to exclude non-Voidcore-eligible items.
 local ITEM_CLASS_MISCELLANEOUS = 15 -- LE_ITEM_CLASS_MISCELLANEOUS
 local ITEM_SUBCLASS_MOUNT = 5 -- LE_ITEM_MISCELLANEOUS_MOUNT
@@ -328,6 +384,183 @@ local function RestoreEJState(origTier, origDifficulty, origClass, origSpec)
     EJ_SetLootFilter(origClass or 0, origSpec or 0)
 end
 
+-- ── Voidcache ID matching ─────────────────────────────────────────────────────
+
+-- Matches every known Voidcache item ID against the current season's dungeon
+-- names (EJ instanceID → name) and raid encounter names (encounterID → name).
+-- Stores results in result.dungeonVoidcacheIDs and result.raidEncounterCacheIDs.
+-- Items that don't match any current-season dungeon or encounter (e.g. Delver's
+-- Trove, Prey) are printed as warnings so the developer can add them manually.
+local function DoVoidcacheMatch(result, season)
+    -- Strips a leading "The " from a name, returning the shorter form.
+    -- Used as a fallback key so "Temple of Sethraliss" matches
+    -- the EJ instance "The Temple of Sethraliss" (and vice-versa).
+    local function StripThe(name)
+        if name:sub(1, 4) == "The " then
+            return name:sub(5)
+        end
+        return nil
+    end
+
+    -- Build name → instanceID lookup for this season's M+ dungeons.
+    -- Each name is inserted both verbatim and without a leading "The ".
+    local dungeonByName = {}
+    local dungeonNameByID = {} -- instanceID → name (for the print report)
+    for _, instanceID in ipairs(season.dungeonInstanceIDs) do
+        local instanceName = EJ_GetInstanceInfo(instanceID)
+        if instanceName and instanceName ~= "" then
+            dungeonByName[instanceName] = instanceID
+            dungeonNameByID[instanceID] = instanceName
+            local stripped = StripThe(instanceName)
+            if stripped then
+                dungeonByName[stripped] = instanceID
+            end
+        end
+    end
+
+    -- Build name → encounterID lookup for this season's raid encounters.
+    local encounterByName = {}
+    local encounterNameByID = {} -- encounterID → name (for the print report)
+    for encounterID in pairs(result.raids) do
+        local encName = EJ_GetEncounterInfo(encounterID)
+        if encName and encName ~= "" then
+            encounterByName[encName] = encounterID
+            encounterNameByID[encounterID] = encName
+            local stripped = StripThe(encName)
+            if stripped then
+                encounterByName[stripped] = encounterID
+            end
+        end
+    end
+
+    local dungeonVoidcacheIDs = {}
+    local raidEncounterCacheIDs = {}
+    local unmapped = {}
+
+    for _, itemID in ipairs(KNOWN_VOIDCACHE_ITEM_IDS) do
+        local name = GetItemInfo(itemID)
+        if name then
+            -- Extract the suffix after the shared prefix.
+            -- Tolerate both "Nebulous Voidcache: Foo" and "Nebulous Voidcache:Foo"
+            -- (Blizzard shipped at least one item without the space after the colon).
+            local suffix = nil
+            if #name > #VOIDCACHE_NAME_PREFIX and name:sub(1, #VOIDCACHE_NAME_PREFIX) == VOIDCACHE_NAME_PREFIX then
+                suffix = name:sub(#VOIDCACHE_NAME_PREFIX + 1)
+            else
+                local shortPrefix = "Nebulous Voidcache:"
+                if #name > #shortPrefix and name:sub(1, #shortPrefix) == shortPrefix then
+                    suffix = name:sub(#shortPrefix + 1)
+                end
+            end
+            if suffix then
+                local instanceID = dungeonByName[suffix]
+                local encounterID = encounterByName[suffix]
+                if instanceID then
+                    dungeonVoidcacheIDs[instanceID] = itemID
+                elseif encounterID then
+                    raidEncounterCacheIDs[encounterID] = itemID
+                else
+                    -- Not a current-season dungeon or encounter — skip silently unless needed.
+                    -- (e.g., Delver's Trove, Prey are not in the EJ; add to Constants.lua manually)
+                    unmapped[#unmapped + 1] = string.format("%d (%s)", itemID, suffix)
+                end
+            end
+        end
+    end
+
+    -- Parallel name tables — stored alongside the ID tables in the SavedVariables
+    -- file so the developer can read which dungeon/encounter each ID belongs to.
+    local dungeonVoidcacheNames = {}
+    local raidEncounterCacheNames = {}
+    for instanceID, _ in pairs(dungeonVoidcacheIDs) do
+        dungeonVoidcacheNames[instanceID] = dungeonNameByID[instanceID] or "?"
+    end
+    for encounterID, _ in pairs(raidEncounterCacheIDs) do
+        raidEncounterCacheNames[encounterID] = encounterNameByID[encounterID] or "?"
+    end
+
+    result.dungeonVoidcacheIDs = dungeonVoidcacheIDs
+    result.dungeonVoidcacheNames = dungeonVoidcacheNames
+    result.raidEncounterCacheIDs = raidEncounterCacheIDs
+    result.raidEncounterCacheNames = raidEncounterCacheNames
+
+    local nd, nr = 0, 0
+    for _ in pairs(dungeonVoidcacheIDs) do
+        nd = nd + 1
+    end
+    for _ in pairs(raidEncounterCacheIDs) do
+        nr = nr + 1
+    end
+    print(string.format("|cff66ccffVoidcoreAdvisorGen:|r Voidcache IDs mapped: %d dungeon, %d raid encounter.", nd, nr))
+
+    -- Build a ready-to-paste Constants.lua snippet with dungeon/encounter names
+    -- as real Lua comments. Stored as VoidcoreAdvisorGenDB.voidcacheSnippet so
+    -- the developer can copy it directly from the SavedVariables file.
+    local lines = {"VCA.DungeonVoidcacheIDs = {"}
+    local dungeonEntries = {}
+    for instanceID, itemID in pairs(dungeonVoidcacheIDs) do
+        dungeonEntries[#dungeonEntries + 1] = {
+            instanceID = instanceID,
+            itemID = itemID
+        }
+    end
+    table.sort(dungeonEntries, function(a, b)
+        return a.instanceID < b.instanceID
+    end)
+    for _, entry in ipairs(dungeonEntries) do
+        local label = dungeonNameByID[entry.instanceID] or "?"
+        lines[#lines + 1] = string.format("    [%d] = %d, -- %s", entry.instanceID, entry.itemID, label)
+    end
+    lines[#lines + 1] = "}"
+    lines[#lines + 1] = "VCA.RaidEncounterCacheIDs = {"
+    local raidEntries = {}
+    for encounterID, itemID in pairs(raidEncounterCacheIDs) do
+        raidEntries[#raidEntries + 1] = {
+            encounterID = encounterID,
+            itemID = itemID
+        }
+    end
+    table.sort(raidEntries, function(a, b)
+        return a.encounterID < b.encounterID
+    end)
+    for _, entry in ipairs(raidEntries) do
+        local label = encounterNameByID[entry.encounterID] or "?"
+        lines[#lines + 1] = string.format("    [%d] = %d, -- %s", entry.encounterID, entry.itemID, label)
+    end
+    lines[#lines + 1] = "}"
+    if #unmapped > 0 then
+        lines[#lines + 1] = "-- Unmatched (add manually):"
+        for _, entry in ipairs(unmapped) do
+            lines[#lines + 1] = "--   " .. entry
+        end
+    end
+    -- Store at the top level of the DB (not inside seasonData) for easy access.
+    if not VoidcoreAdvisorGenDB then
+        VoidcoreAdvisorGenDB = {}
+    end
+    VoidcoreAdvisorGenDB.voidcacheSnippet = table.concat(lines, "\n")
+
+    -- Also print to chat for quick reference.
+    print("|cff66ccffVoidcoreAdvisorGen:|r |cff00ccffDungeonVoidcacheIDs:|r")
+    for _, entry in ipairs(dungeonEntries) do
+        local label = dungeonNameByID[entry.instanceID] or "?"
+        print(string.format("  [%d] = %d, -- %s", entry.instanceID, entry.itemID, label))
+    end
+    print("|cff66ccffVoidcoreAdvisorGen:|r |cff00ccffRaidEncounterCacheIDs:|r")
+    for _, entry in ipairs(raidEntries) do
+        local label = encounterNameByID[entry.encounterID] or "?"
+        print(string.format("  [%d] = %d, -- %s", entry.encounterID, entry.itemID, label))
+    end
+    if #unmapped > 0 then
+        print(
+            "|cff66ccffVoidcoreAdvisorGen:|r |cffffff00Note:|r These voidcache IDs didn't match any current-season " ..
+                "dungeon or encounter — add them to Constants.lua manually:")
+        for _, entry in ipairs(unmapped) do
+            print("    " .. entry)
+        end
+    end
+end
+
 -- ── Async generation ─────────────────────────────────────────────────────────
 
 local _genTicker = nil
@@ -423,7 +656,8 @@ local function RunGeneration()
         VoidcoreAdvisorGenDB.generatedBuild = tostring(ver)
 
         print(string.format("|cff66ccffVoidcoreAdvisorGen:|r |cff00ff00Generation complete!|r  " ..
-                                "%d dungeons, %d raid encounters saved.  " .. "Now type |cffffd700/reload|r, then copy " ..
+                                "%d dungeons, %d raid encounters, %d dungeon voidcache IDs, " ..
+                                "%d raid voidcache IDs saved.  " .. "Now type |cffffd700/reload|r, then copy " ..
                                 "VoidcoreAdvisorGenDB[\"seasonData\"] from your SavedVariables file " ..
                                 "into Core/SeasonData.lua.", (function()
             local n = 0
@@ -437,19 +671,52 @@ local function RunGeneration()
                 n = n + 1
             end
             return n
+        end)(), (function()
+            local n = 0
+            for _ in pairs(result.dungeonVoidcacheIDs or {}) do
+                n = n + 1
+            end
+            return n
+        end)(), (function()
+            local n = 0
+            for _ in pairs(result.raidEncounterCacheIDs or {}) do
+                n = n + 1
+            end
+            return n
         end)()))
     end
 
     local qIdx = 0
+    local _vcPhase = false -- true once the queue is exhausted and we entered the voidcache phase
+    local _vcWaitTicks = 0 -- ticks elapsed during the wait
+    local VOIDCACHE_WAIT_TICKS = 20 -- ~2.4 s at 0.12 s/tick
 
     _genTicker = C_Timer.NewTicker(0.12, function()
+        -- ── Voidcache matching phase (runs after all queue items are done) ─
+        if _vcPhase then
+            _vcWaitTicks = _vcWaitTicks + 1
+            if _vcWaitTicks >= VOIDCACHE_WAIT_TICKS then
+                _vcPhase = false
+                DoVoidcacheMatch(result, season)
+                Finish(true)
+            end
+            return
+        end
+
         -- Build raid queue entries once all dungeon-discover passes are done
         -- (we need encounter IDs from the dungeon-discover step first, but for
         -- raids we discover encounters inline during the raid-encounters step).
 
         qIdx = qIdx + 1
         if qIdx > #queue then
-            Finish(true)
+            -- All queue items processed — start the voidcache matching phase.
+            -- Request item data for every known voidcache ID so their names are
+            -- available when DoVoidcacheMatch runs after the wait.
+            _vcPhase = true
+            _vcWaitTicks = 0
+            for _, itemID in ipairs(KNOWN_VOIDCACHE_ITEM_IDS) do
+                C_Item.RequestLoadItemDataByID(itemID)
+            end
             return
         end
 
@@ -733,26 +1000,97 @@ SlashCmdList["VCAGEN"] = function(msg)
 
     if cmd == "run" then
         RunGeneration()
+    elseif cmd == "list" then
+        -- List every current-season dungeon instanceID+name and raid encounterID+name
+        -- so you can manually build the DungeonVoidcacheIDs / RaidEncounterCacheIDs
+        -- tables in Constants.lua.
+        if not EncounterJournal then
+            if EncounterJournal_LoadUI then
+                EncounterJournal_LoadUI()
+            end
+        end
+        local numTiers = EJ_GetNumTiers and EJ_GetNumTiers() or 0
+        if numTiers == 0 then
+            print("|cff66ccffVoidcoreAdvisorGen:|r EJ not loaded — open the Encounter Journal first (/ej).")
+            return
+        end
+
+        local season, err = DiscoverSeason()
+        if not season then
+            print("|cff66ccffVoidcoreAdvisorGen:|r " .. err)
+            return
+        end
+
+        -- ── M+ Dungeons ──────────────────────────────────────────────────────
+        print("|cff66ccffVoidcoreAdvisorGen:|r |cff00ccffSeason M+ Dungeons (instanceID → name):|r")
+        for _, instanceID in ipairs(season.dungeonInstanceIDs) do
+            local name = EJ_GetInstanceInfo(instanceID) or "?"
+            print(string.format("  [%d] = ?, -- %s", instanceID, name))
+        end
+
+        -- ── Raid encounters ───────────────────────────────────────────────────
+        print("|cff66ccffVoidcoreAdvisorGen:|r |cff00ccffSeason Raid Encounters (encounterID → name):|r")
+        -- Walk each raid instance from DiscoverSeason to enumerate its encounters.
+        local savedTier = EJ_GetCurrentTier()
+        EJ_SelectTier(numTiers)
+        local savedDiff = EJ_GetDifficulty()
+        EJ_SetDifficulty(RAID_NORMAL)
+
+        -- Collect and sort raid instanceIDs for stable output.
+        local raidIDs = {}
+        for instanceID in pairs(season.raidInstanceIDs) do
+            raidIDs[#raidIDs + 1] = instanceID
+        end
+        table.sort(raidIDs)
+
+        for _, instanceID in ipairs(raidIDs) do
+            local raidName = EJ_GetInstanceInfo(instanceID) or "?"
+            print(string.format("|cff66ccffVoidcoreAdvisorGen:|r  Raid: %s (instanceID %d)", raidName, instanceID))
+            EJ_SelectInstance(instanceID)
+            local encIdx = 1
+            while true do
+                local encName, _, encounterID = EJ_GetEncounterInfoByIndex(encIdx)
+                if not encName then
+                    break
+                end
+                print(string.format("    [%d] = ?, -- %s", encounterID, encName))
+                encIdx = encIdx + 1
+            end
+        end
+
+        -- Restore EJ state.
+        EJ_SetDifficulty(savedDiff)
+        if savedTier and savedTier > 0 then
+            EJ_SelectTier(savedTier)
+        end
     elseif cmd == "status" then
         if _genRunning then
             print("|cff66ccffVoidcoreAdvisorGen:|r Generation is in progress...")
         elseif VoidcoreAdvisorGenDB and VoidcoreAdvisorGenDB.seasonData then
             local build = VoidcoreAdvisorGenDB.generatedBuild or "?"
-            local nd, nr = 0, 0
+            local nd, nr, nvc_d, nvc_r = 0, 0, 0, 0
             for _ in pairs(VoidcoreAdvisorGenDB.seasonData.dungeons or {}) do
                 nd = nd + 1
             end
             for _ in pairs(VoidcoreAdvisorGenDB.seasonData.raids or {}) do
                 nr = nr + 1
             end
+            for _ in pairs(VoidcoreAdvisorGenDB.seasonData.dungeonVoidcacheIDs or {}) do
+                nvc_d = nvc_d + 1
+            end
+            for _ in pairs(VoidcoreAdvisorGenDB.seasonData.raidEncounterCacheIDs or {}) do
+                nvc_r = nvc_r + 1
+            end
             print(string.format("|cff66ccffVoidcoreAdvisorGen:|r Last run on build %s — " ..
-                                    "%d dungeons, %d raid encounters stored.", build, nd, nr))
+                                    "%d dungeons, %d raid encounters, %d dungeon voidcache IDs, " ..
+                                    "%d raid voidcache IDs stored.", build, nd, nr, nvc_d, nvc_r))
         else
             print("|cff66ccffVoidcoreAdvisorGen:|r No data yet.  Use /vcagen run.")
         end
     else
         print("|cff66ccffVoidcoreAdvisorGen:|r Commands:")
         print("  |cffffd700/vcagen run|r           — Walk EJ and collect season loot data")
+        print("  |cffffd700/vcagen list|r          — Print dungeon instanceIDs and raid encounterIDs with names")
         print("  |cffffd700/vcagen status|r         — Show last generation result")
         print("")
         print("After running: type |cffffd700/reload|r, then open your SavedVariables file and")
